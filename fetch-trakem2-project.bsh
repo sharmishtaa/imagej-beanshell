@@ -1,0 +1,97 @@
+// @String(label="Server base URL",value="http://tem-services.int.janelia.org:8080/render-ws/v1") server
+// @String(label="Owner",value="flyTEM") owner
+// @String(label="Project ID",value="FAFB00") projectId
+// @String(label="Stack ID",value="v7_align_tps") stackId
+// @Double(label="Min X", description="Left most pixel coordinate in world coordinates.  Default is bounds.minX of the stack.") x
+// @Double(label="Min Y", description="Top most pixel coordinate in world coordinates.  Default is bounds.minY of the stack.") y
+// @Double(label="Min Z", description="Front most pixel coordinate in world coordinates.  Default is the first entry in the stack's z-values.") z
+// @Long(label="Width", description="Width in world coordinates.  Default is bounds.maxX - x of the stack.") w
+// @Long(label="Height", description="Height in world coordinates.  Default is bounds.maxY - y of the stack.") h
+// @Double(label="Depth", description="Depth in world coordinates.  Default is the last entry in the stack's z-values - Min Z.") d
+
+import ij.*;
+import ij.io.*;
+import ij.process.*;
+import ini.trakem2.Project;
+import ini.trakem2.display.Layer;
+import ini.trakem2.display.Patch;
+import java.awt.geom.*;
+import java.io.*;
+import java.net.*;
+import org.janelia.alignment.*;
+import org.janelia.alignment.RenderParameters;
+import mpicbg.trakem2.transform.*;
+
+/** FAFB00-v12 */
+String server = "http://ibs-forrestc-ux1.corp.alleninstitute.org:8080/render-ws/v1";
+String owner = "Sharmishtaas";
+String projectId = "M247514_Rorb_1";
+String stackId = "REGISTEREDDAPI_1";
+String dir = "/nas/data/M247514_Rorb_1/processed/stack/";
+
+
+
+IJ.log(server);
+IJ.log(owner);
+IJ.log(projectId);
+IJ.log(stackId);
+
+
+runtime = Runtime.getRuntime();
+System.out.println(runtime.availableProcessors() + " cores available for multi-threading" );
+
+project = Project.newFSProject("blank", null, dir, true);
+project.setProperty("mesh_resolution", "128");
+loader = project.getLoader();
+layerset = project.getRootLayerSet();
+layerset.setSnapshotsMode(1);
+
+String urlString = server + "/owner/" + owner +"/project/" + projectId +"/stack/" + stackId +"/z/%f" +"/render-parameters";
+
+for (Double zi = 0; zi < 3; zi+=1){ 
+	String queryString = String.format(urlString, new Object[]{zi, 10, 10, 1000, 1000});
+	IJ.log(queryString);
+
+	RenderParameters parameters = RenderParameters.parseJson(new InputStreamReader(new URL(queryString).openStream()));
+
+	layer = new Layer(project, zi, 1, layerset);
+	layerset.add(layer);
+	layer.recreateBuckets();
+
+	for (spec : parameters.getTileSpecs()) {
+		image = spec.getFirstMipmapEntry().getValue(); 
+		String imgUrl = image.getImageUrl();
+		String maskUrl = image.getMaskUrl();
+
+		IJ.log(imgUrl.substring(5));
+
+		Patch patch = new Patch( project, imgUrl, spec.getWidth(), spec.getHeight(), spec.getWidth(), spec.getHeight(), ImagePlus.GRAY8, 1.0f, Color.yellow, false, spec.getMinIntensity(), spec.getMaxIntensity(), new AffineTransform(), imgUrl.substring(5));
+		layer.add(patch);
+
+		ImagePlus mask = new Opener().openImage(maskUrl.substring(5));
+		patch.setAlphaMask(mask.getProcessor().convertToByteProcessor());
+		CoordinateTransformList ctl = new CoordinateTransformList();
+		for (CoordinateTransform ct : spec.getTransformList().getList(null))
+			ctl.add(ct);
+
+		IJ.log(spec.getTransformList().getList(null).size() + "");
+
+		try {
+			patch.setCoordinateTransform(ctl);
+		} catch (e) {e.printStackTrace();}
+
+		layer.recreateBuckets();
+			
+//		spec.getTransformList();
+	}
+	
+//	IJ.log(parameters.toJson());
+}
+
+layerset.setDimensions(
+	(float)(x - padding),
+	(float)(y - padding),
+	(float)(w + 2 * padding),
+	(float)(h + 2 * padding));
+
+

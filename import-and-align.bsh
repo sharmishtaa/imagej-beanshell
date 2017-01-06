@@ -1,0 +1,244 @@
+/**
+ * Call
+ *
+ * xvfb-run -a ./ImageJ-linux64 -Ddir=<project directory> -Dfile=<import file>  -- --no-splash import-and-align.bsh
+ *
+ * on the cluster with absolute paths, e.g.
+ *
+ * ${HOME}/bin/xvfb-run -a ${HOME}/packages/Fiji.app/fiji-linux64 \
+ *   -Xms10g -Xmx10g -Ddir=${HOME}/AL-FIB-Z0712-12/0-99 \
+ *   -Dfile=${HOME}/AL-FIB-Z0712-12/0-99/import.txt  -- --no-splash \
+ *   ${HOME}/AL-FIB-Z0712-12/AL-FIB-Z0712-12/import-and-align.bsh
+ * 
+ * @author Stephan Saalfeld <saalfeld@mpi-cbg.de>
+ */
+
+import ini.trakem2.ControlWindow;
+import ini.trakem2.Project;
+import ini.trakem2.display.Layer;
+import ini.trakem2.display.Patch;
+import ini.trakem2.utils.Filter;
+import ij.ImagePlus;
+import java.lang.Runtime;
+import java.util.ArrayList;
+import java.util.HashSet;
+import mpicbg.trakem2.align.ElasticLayerAlignment;
+import mpicbg.trakem2.align.RegularizedAffineLayerAlignment;
+
+try {
+	runtime = Runtime.getRuntime();
+	System.out.println( runtime.availableProcessors() + " cores available for multi-threading" );
+	//System.getProperties().setProperty("plugins.dir","/home/sharmishtaas/packages/Fiji.app/plugins");
+	//System.getProperties().setProperty("ij1.plugins.dir", "/home/sharmishtaas/packages/Fiji.app/plugins/");
+	dir = System.getProperty("dir");
+	file = System.getProperty("file");
+	
+	ControlWindow.setGUIEnabled(false);
+	project = Project.newFSProject("blank", null, dir, false);
+	loader = project.getLoader();
+	layerset = project.getRootLayerSet();
+	layerset.setSnapshotsMode(1);
+	
+	/* add a reference layer (pointless gymnastik) */
+	layer = new Layer(project, 0, 1, layerset);
+	layerset.add(layer);
+	layer.recreateBuckets();
+	
+	/* import images */
+	task = loader.importImages(
+			layerset.getLayer(0),	// the first layer
+			file,					// the absolute file path to the text file with absolute image file paths
+			" ",					// the column separator  <path> <x> <y> <section index>
+			1.0,					// section thickness, defaults to 1
+			1.0,					// calibration, defaults to 1
+			false,					// whether to homogenize contrast, avoid
+			1.0f,					// scaling factor, default to 1
+			0);						// border width
+	
+	/* wait until all images have been imported */
+	task.join();
+	
+//	/* wait until all mipmaps are generated */
+//	futures = new ArrayList();
+//	for (p : layerset.getDisplayables(Patch.class))
+//		futures.add(p.updateMipMaps());
+//	for (f : futures)
+//		f.get();
+
+	/* delete reference layer if it was not part of the import range */
+	l0 = layerset.getLayer(0);
+	if (l0.getDisplayables(Patch.class).size() == 0)
+		layerset.remove(l0);
+	
+
+	/* save the project */
+		project.saveAs(dir + "/project.xml", false);
+	
+	/* prepare alignment */
+	layerRange = layerset.getLayers();
+	fixedLayers = new HashSet();
+
+	emptyLayers = new HashSet();
+	
+	filter = new Filter() {
+		public boolean accept(Patch patch) {
+			return patch.isVisible();
+			}
+		};
+	
+	/* affine alignment */
+	paramAffine = new RegularizedAffineLayerAlignment.Param();
+	
+	paramAffine.ppm.sift.initialSigma = 1.6f;
+	paramAffine.ppm.sift.steps = 3;
+	paramAffine.ppm.sift.minOctaveSize = 200;
+	paramAffine.ppm.sift.maxOctaveSize = 2048;
+	paramAffine.ppm.sift.fdSize = 4;
+	paramAffine.ppm.sift.fdBins = 8;
+	paramAffine.ppm.rod = 0.92f;
+	paramAffine.ppm.clearCache = true;
+	paramAffine.ppm.maxNumThreadsSift = runtime.availableProcessors();
+	
+	paramAffine.maxEpsilon = 20.0f;
+	paramAffine.minInlierRatio = 0.1f;
+	paramAffine.minNumInliers = 50;
+	
+	//model indices, 0=translation, 1=rigid, 2=similarity, 3=affine
+	paramAffine.expectedModelIndex = 1;
+	
+	paramAffine.multipleHypotheses = true;
+	paramAffine.rejectIdentity = false;
+	paramAffine.identityTolerance = 0.0f;
+	paramAffine.maxNumNeighbors = 10;
+	paramAffine.maxNumFailures = 3;
+	paramAffine.maxNumThreads = runtime.availableProcessors();
+	
+	//model indices, 0=translation, 1=rigid, 2=similarity, 3=affine
+	paramAffine.desiredModelIndex = 3;
+	
+	paramAffine.regularize = true;
+	paramAffine.maxIterationsOptimize = 200;
+	paramAffine.maxPlateauwidthOptimize = 2000;
+	
+	//model indices, 0=translation, 1=rigid, 2=similarity, 3=affine
+	paramAffine.regularizerIndex = 1;
+	paramAffine.visualize = false;
+	
+	paramAffine.lambda = 0.1f;
+	
+	new RegularizedAffineLayerAlignment().exec(
+			paramAffine,
+			layerRange,	
+			fixedLayers,
+			emptyLayers,
+			layerset.get2DBounds(),
+			false,
+			false,
+			filter);
+	
+	paramAffine.lambda = 0.01f;
+	
+	layerset.setMinimumDimensions();
+	
+	new RegularizedAffineLayerAlignment().exec(
+			paramAffine,
+			layerRange,	
+			fixedLayers,
+			emptyLayers,
+			layerset.get2DBounds(),
+			false,
+			false,
+			filter);
+	
+
+	allpatches = layerset.getDisplayables(Patch.class);
+	affine0= allpatches.get(0).getAffineTransform();
+	affine = affine0.createInverse();
+
+	for (patch : layerset.getDisplayables(Patch.class)) {
+		patch.getAffineTransform().preConcatenate(affine);
+		patch.updateInDatabase("transform");
+		patch.updateBucket();
+	}
+
+	layerset.setMinimumDimensions();
+		
+	/* save the project */
+	project.saveAs(dir + "/project.xml", true);
+
+	/* elastic alignment */
+	paramElastic = new ElasticLayerAlignment.Param();
+	
+	paramElastic.layerScale = 0.25f;
+	paramElastic.searchRadius = 25;
+	//paramElastic.blockRadius = 200;
+	paramElastic.blockRadius = 128;
+	paramElastic.resolutionSpringMesh = (int)Math.ceil((double)layerset.get2DBounds().width / 400);
+	
+	paramElastic.minR = 0.4f;
+	paramElastic.maxCurvatureR = 10.0f;
+	paramElastic.rodR = 0.9f;
+	
+	paramElastic.useLocalSmoothnessFilter = true;
+	paramElastic.localModelIndex = 1;
+	paramElastic.localRegionSigma = 400.0f;
+	paramElastic.maxLocalEpsilon = 25.0f;
+	paramElastic.maxLocalTrust = 4.0f;
+	
+	paramElastic.isAligned = true;
+	paramElastic.maxNumFailures = 3;
+	paramElastic.maxNumNeighbors = 10;
+	paramElastic.maxNumThreads = 8;
+	
+	paramElastic.desiredModelIndex = 1;
+	paramElastic.maxIterationsOptimize = 1000;
+	paramElastic.maxPlateauwidthOptimize = 200;
+
+	//paramElastic.stiffnessSpringMesh = 0.25f; //original
+	paramElastic.stiffnessSpringMesh = 0.1f;
+	paramElastic.maxStretchSpringMesh = 2000.0f;
+	paramElastic.maxIterationsSpringMesh = 5000;
+	paramElastic.maxPlateauwidthSpringMesh = 1000;
+	paramElastic.dampSpringMesh = 0.9f;
+	paramElastic.useLegacyOptimizer = false;
+
+	new ElasticLayerAlignment().exec(
+		paramElastic,
+		project,
+		layerRange,
+		fixedLayers,
+		emptyLayers,
+		layerset.get2DBounds(),
+		false,
+		false,
+		filter);
+	
+	/* wait until all mipmaps are generated */
+	futures = new ArrayList();
+	for (p : layerset.getDisplayables(Patch.class))
+		futures.add(p.updateMipMaps());
+	for (f : futures)
+		f.get();
+		
+	allpatches = layerset.getDisplayables(Patch.class);
+	affine0= allpatches.get(0).getAffineTransform();
+	affine = affine0.createInverse();
+
+	for (patch : layerset.getDisplayables(Patch.class)) {
+		patch.getAffineTransform().preConcatenate(affine);
+		patch.updateInDatabase("transform");
+		patch.updateBucket();
+	}
+
+	layerset.setMinimumDimensions(); 
+		
+	/* save the project */
+	project.saveAs(dir + "/project.xml", true); 
+}
+catch (e) {
+	e.printStackTrace();
+}
+
+/* shutdown */
+runtime.exit(0);
+

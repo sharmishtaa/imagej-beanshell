@@ -1,0 +1,141 @@
+/**
+ * Call
+ *
+ * xvfb-run -a ./ImageJ-linux64 -Dproj=<trakem2 XML> -Doutdir=<out directory> -- --no-splash intersection_AffineAlign.bsh
+ *
+ * @author Stephan Saalfeld <saalfeld@mpi-cbg.de>
+ * modified by Russel Torres
+ * modified by Sharmishtaa Seshamani
+ */
+
+import ini.trakem2.ControlWindow;
+import ini.trakem2.Project;
+import ini.trakem2.display.Layer;
+import ini.trakem2.display.Patch;
+import ini.trakem2.utils.Filter;
+/* import ini.trakem2.utils.Montage; */
+import ini.trakem2.imaging.filters.NormalizeLocalContrast;
+import ini.trakem2.imaging.filters.IFilter;
+import ij.ImagePlus;
+import java.lang.Runtime;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.regex;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import mpicbg.trakem2.align.Align;
+import mpicbg.trakem2.align.AlignTask;
+import mpicbg.trakem2.align.RegularizedAffineLayerAlignment;
+
+Project cloneProject(origProj, newdir) {
+	/*
+	clone all layers in project, generating project with new unuid,
+		and thus temporary directories
+	*/
+
+	check = new File(newdir).isDirectory();
+	fileobj = new File(newdir);
+
+	newProj = Project.newFSProject("blank", null, newdir, false);
+	System.out.println( "After opening second one..." );
+	
+
+	newloader = newProj.getLoader();
+	newloader.setMipMapsRegeneration(false);
+
+	newlayerset = newProj.getRootLayerSet();
+	newlayerset.setSnapshotsMode(1);
+
+	origLayerSet = origProj.getRootLayerSet();
+	for (l: origLayerSet.getLayers()) {
+		newlayerset.add(l.clone(newProj, newlayerset, l.getMinimalBoundingBox(Patch.class), false, false));
+	}
+
+	newlayerset.setMinimumDimensions();
+	return newProj;
+}
+
+
+try {
+  runtime = Runtime.getRuntime();
+  proj = System.getProperty("proj");
+
+  dir = System.getProperty("outdir"); // TODO better handling
+  ControlWindow.setGUIEnabled(false);
+  project = cloneProject(Project.openFSProject(proj, false), dir);
+  layerset = project.getRootLayerSet();
+  layerset.setSnapshotsMode(1);
+
+  // prepare inter-section alignment
+	layerRange = layerset.getLayers();
+	fixedLayers = new HashSet();
+	emptyLayers = new HashSet();
+
+
+  // use visible patches only
+	filter = new Filter() {
+		public boolean accept(Patch patch) {
+			return patch.isVisible();
+			}
+		};
+
+
+	/* affine alignment */
+	System.out.println( "Inter-section affine alignment starting..." );
+
+	paramAffine = new RegularizedAffineLayerAlignment.Param();
+
+	paramAffine.ppm.sift.initialSigma 	= 1.6f;
+	paramAffine.ppm.sift.steps 		= 9;
+	paramAffine.ppm.sift.minOctaveSize 	= 200;
+	paramAffine.ppm.sift.maxOctaveSize 	= 2048;
+	paramAffine.ppm.sift.fdSize 		= 8;
+	paramAffine.ppm.sift.fdBins 		= 8;
+	paramAffine.ppm.rod 			= 0.92f;
+	paramAffine.ppm.clearCache 		= true;
+	paramAffine.ppm.maxNumThreadsSift 	= runtime.availableProcessors() - 1;//24;
+
+	paramAffine.maxEpsilon 			= 40.0f;
+	paramAffine.minInlierRatio 		= 0.10f;
+	paramAffine.minNumInliers 		= 20;
+	      /*  ModelIndex 0 = "Translation", 1 = "Rigid", 2 = "Similarity", 3 = "Affine" */
+	paramAffine.expectedModelIndex 		= 1;
+	paramAffine.multipleHypotheses 		= true;
+	paramAffine.rejectIdentity 		= false;
+	paramAffine.identityTolerance 		= 0.0f;
+	paramAffine.maxNumNeighbors 		= 10;
+	paramAffine.maxNumFailures 		= 3;
+	paramAffine.maxNumThreads 		= runtime.availableProcessors(); //runtime.availableProcessors(); TODO what is this value?
+
+	paramAffine.desiredModelIndex 		= 3; /* affine */
+	paramAffine.regularize 			= true;
+	paramAffine.maxIterationsOptimize 	= 2000;
+	paramAffine.maxPlateauwidthOptimize 	= 1000;
+	paramAffine.regularizerIndex 		= 1;
+	paramAffine.visualize 			= false;
+
+
+  /* affine regularized by 0.10 rigid */
+	paramAffine.lambda 			= 0.1f;
+	new RegularizedAffineLayerAlignment().exec(
+			paramAffine,
+			layerRange,
+			fixedLayers,
+			emptyLayers,
+			layerset.get2DBounds(),
+      false,
+      false,
+			filter);
+
+	layerset.setMinimumDimensions();
+
+	/* save the project */
+	project.saveAs(dir + "/intersection_Affine.xml", true);
+}
+catch (e) {
+	e.printStackTrace();
+}
+
+/* shutdown */
+System.exit(0);  // exit with bravado
+runtime.exit(0);

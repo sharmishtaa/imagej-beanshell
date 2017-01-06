@@ -1,0 +1,78 @@
+/**
+ * Call
+ *
+ * xvfb-run -a ./ImageJ-linux64 -Ddir=<project directory> -Dfile=<import file>  -- --no-splash import-and-align.bsh
+ *
+ * on the cluster with absolute paths, e.g.
+ *
+ * ${HOME}/bin/xvfb-run -a ${HOME}/packages/Fiji.app/fiji-linux64 \
+ *   -Xms10g -Xmx10g -Ddir=${HOME}/AL-FIB-Z0712-12/0-99 \
+ *   -Dfile=${HOME}/AL-FIB-Z0712-12/0-99/import.txt  -- --no-splash \
+ *   ${HOME}/AL-FIB-Z0712-12/AL-FIB-Z0712-12/import-and-align.bsh
+ * 
+ * @author Stephan Saalfeld <saalfeld@mpi-cbg.de>
+ */
+
+import ini.trakem2.ControlWindow;
+import ini.trakem2.Project;
+import ini.trakem2.display.Layer;
+import ini.trakem2.display.Patch;
+import ini.trakem2.utils.Filter;
+import ij.ImagePlus;
+import java.lang.Runtime;
+import java.util.ArrayList;
+import java.util.HashSet;
+import mpicbg.trakem2.align.ElasticLayerAlignment;
+import mpicbg.trakem2.align.RegularizedAffineLayerAlignment;
+
+try {
+	runtime = Runtime.getRuntime();
+	System.out.println( runtime.availableProcessors() + " cores available for multi-threading" );
+	//System.getProperties().setProperty("plugins.dir","/home/sharmishtaas/packages/Fiji.app/plugins");
+	//System.getProperties().setProperty("ij1.plugins.dir", "/home/sharmishtaas/packages/Fiji.app/plugins/");
+	dir = System.getProperty("dir");
+	file = System.getProperty("file");
+	
+	ControlWindow.setGUIEnabled(false);
+	project = Project.newFSProject("blank", null, dir, false);
+	loader = project.getLoader();
+	layerset = project.getRootLayerSet();
+	layerset.setSnapshotsMode(1);
+	
+	/* add a reference layer (pointless gymnastik) */
+	layer = new Layer(project, 0, 1, layerset);
+	layerset.add(layer);
+	layer.recreateBuckets();
+	
+	/* import images */
+	/*task = loader.importImages(
+			layerset.getLayer(0),	// the first layer
+			file,					// the absolute file path to the text file with absolute image file paths
+			" ",					// the column separator  <path> <x> <y> <section index>
+			1.0,					// section thickness, defaults to 1
+			1.0,					// calibration, defaults to 1
+			false,					// whether to homogenize contrast, avoid
+			1.0f,					// scaling factor, default to 1
+			0);						// border width
+	*/
+	/* wait until all images have been imported */
+	//task.join();
+	
+
+	/* delete reference layer if it was not part of the import range */
+	l0 = layerset.getLayer(0);
+	if (l0.getDisplayables(Patch.class).size() == 0)
+		layerset.remove(l0);
+	
+
+	/* save the project */
+		project.saveAs(dir + "/project.xml", false);
+
+}
+catch (e) {
+	e.printStackTrace();
+}
+
+/* shutdown */
+runtime.exit(0);
+
